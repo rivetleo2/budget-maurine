@@ -72,6 +72,7 @@ input:focus{border-color:var(--brand);background:#fff}
 .week-info{flex:1;margin-left:13px;min-width:0}
 .week-name{font-weight:700;font-size:15px}
 .week-amounts{font-size:12.5px;color:var(--muted);margin-top:2px;font-weight:500}
+.week-left{font-size:13px;font-weight:700;margin-top:3px}
 .week-over{color:var(--red);margin-left:6px;font-weight:700}
 .week-bar-bg{margin-top:8px;height:5px;border-radius:4px;background:var(--surface-2);overflow:hidden}
 .week-bar{height:100%;border-radius:4px;transition:width .4s}
@@ -138,6 +139,9 @@ input:focus{border-color:var(--brand);background:#fff}
 .btn-save.saved{background:var(--green);box-shadow:0 6px 16px rgba(22,163,74,.28)}
 .save-warn{font-size:11.5px;color:var(--faint);text-align:center;margin-bottom:24px}
 .params-row{display:flex;gap:10px}
+.seg{display:flex;gap:6px;background:var(--surface-2);border-radius:12px;padding:4px}
+.seg-btn{flex:1;padding:9px;border:none;border-radius:9px;background:transparent;color:var(--muted);font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;transition:all .15s}
+.seg-btn.on{background:var(--brand);color:#fff;box-shadow:0 2px 6px rgba(233,87,127,.3)}
 .params-row .field:first-child{flex:2}
 .params-row .field:last-child{flex:1}
 
@@ -180,7 +184,7 @@ input:focus{border-color:var(--brand);background:#fff}
 <script>
 // ── Data (clés localStorage inchangées : bc / bw) ─────────────────
 const DEFAULT_CONFIG = {
-  month: "Juin 2026", weeksInMonth: 4,
+  month: "Juin 2026", weeksInMonth: 4, envMode: "auto", envFixed: 180,
   charges: [],
   income: []
 };
@@ -221,6 +225,9 @@ let state = {
 };
 // Migration douce : assure une catégorie sur anciennes dépenses
 state.weeks.forEach(w=>w.expenses.forEach(e=>{if(!e.cat)e.cat="Autre"}));
+// Migration : champs enveloppe sur anciennes configs sauvegardées
+if(!state.config.envMode) state.config.envMode="auto";
+if(state.config.envFixed==null) state.config.envFixed=180;
 
 function persist(){saveData("bc_m",state.config);saveData("bw_m",state.weeks);}
 
@@ -230,7 +237,11 @@ function totals(){
   const tC=cfg.charges.reduce((s,c)=>s+Number(c.amount||0),0);
   const tI=cfg.income.reduce((s,c)=>s+Number(c.amount||0),0);
   const dispo=tI-tC;
-  const env=Math.round(dispo/(cfg.weeksInMonth||5));
+  const nbW=cfg.weeksInMonth||5;
+  // Enveloppe : soit fixée par l'utilisatrice, soit calculée (disponible ÷ semaines)
+  const env = cfg.envMode==="fixed"
+    ? Math.round(Number(cfg.envFixed)||0)
+    : Math.round(dispo/nbW);
   const tSpent=state.weeks.reduce((s,w)=>s+w.expenses.reduce((a,e)=>a+Number(e.amount||0),0),0);
   const remaining=dispo-tSpent;
   return {tC,tI,dispo,env,tSpent,remaining};
@@ -305,6 +316,7 @@ function renderHome(){
 
 function renderWeekCard(week, env){
   const used=week.expenses.reduce((s,e)=>s+Number(e.amount||0),0);
+  const left=env-used;
   const p=pct(used,env), col=colP(p), over=used>env, isOpen=state.openWeekId===week.id;
   const card=el("div","week-card");
 
@@ -314,6 +326,7 @@ function renderWeekCard(week, env){
   info.innerHTML=`
     <div class="week-name">${week.label}</div>
     <div class="week-amounts num">${fmt(used)} € / ${fmt(env)} €${over?`<span class="week-over">+${fmt(used-env)} €</span>`:""}</div>
+    <div class="week-left num" style="color:${left<0?"var(--red)":"var(--green)"}">${left<0?"Dépassé de "+fmt(-left)+" €":"Reste "+fmt(left)+" €"}</div>
     <div class="week-bar-bg"><div class="week-bar" style="width:${p}%;background:${col}"></div></div>`;
   row.appendChild(info);
 
@@ -548,9 +561,21 @@ function renderConfig(){
   const psec=el("div","");
   psec.innerHTML=`<div class="sec-head">Paramètres</div>`;
   const pbox=el("div","sec-box");
+  const isFixed=loc.envMode==="fixed";
   pbox.innerHTML=`<div class="params-row">
       <div class="field"><div class="field-label">MOIS</div><input id="cfg-month" type="text" value="${loc.month}"></div>
       <div class="field"><div class="field-label">SEMAINES</div><input id="cfg-weeks" type="number" value="${loc.weeksInMonth}" min="4" max="6" inputmode="numeric"></div>
+    </div>
+    <div class="field" style="margin-top:4px">
+      <div class="field-label">ENVELOPPE HEBDO</div>
+      <div class="seg">
+        <button class="seg-btn${!isFixed?" on":""}" data-env="auto">Automatique</button>
+        <button class="seg-btn${isFixed?" on":""}" data-env="fixed">Montant fixe</button>
+      </div>
+    </div>
+    <div class="field" id="env-fixed-wrap" style="${isFixed?"":"display:none"}">
+      <div class="field-label">MONTANT FIXE PAR SEMAINE (€)</div>
+      <input id="cfg-envfixed" type="number" value="${loc.envFixed||0}" inputmode="decimal" placeholder="180">
     </div>`;
   psec.appendChild(pbox);wrap.appendChild(psec);
 
@@ -563,7 +588,7 @@ function renderConfig(){
     <div class="sum-row"><span class="sum-label">Total revenus</span><span class="sum-val num" id="sum-income" style="color:var(--green)">+ ${fmt(tI)} €</span></div>
     <hr class="sum-divider">
     <div class="sum-row"><span class="sum-label">Disponible</span><span class="sum-val num" id="sum-dispo" style="color:${dispo<0?"var(--red)":"var(--text)"};font-size:16px">${fmt(dispo)} €</span></div>
-    <div class="sum-row"><span class="sum-label">Enveloppe / sem. (×${loc.weeksInMonth})</span><span class="sum-val num" id="sum-env" style="color:var(--brand)">${fmt(env)} €</span></div>`;
+    <div class="sum-row"><span class="sum-label" id="sum-env-label">${loc.envMode==="fixed"?"Enveloppe / sem. (fixe)":"Enveloppe / sem. (×"+loc.weeksInMonth+")"}</span><span class="sum-val num" id="sum-env" style="color:var(--brand)">${fmt(env)} €</span></div>`;
   wrap.appendChild(sumbox);
 
   // Bouton "Nouveau mois" : remet à zéro UNIQUEMENT les dépenses des semaines (avec confirmation)
@@ -576,7 +601,8 @@ function renderConfig(){
     const loc2=state.config;
     const tC2=loc2.charges.reduce((s,c)=>s+Number(c.amount||0),0);
     const tI2=loc2.income.reduce((s,c)=>s+Number(c.amount||0),0);
-    const dispo2=tI2-tC2, env2=Math.round(dispo2/(loc2.weeksInMonth||5));
+    const dispo2=tI2-tC2;
+    const env2 = loc2.envMode==="fixed" ? Math.round(Number(loc2.envFixed)||0) : Math.round(dispo2/(loc2.weeksInMonth||5));
     wrap.querySelector("#chg-total").textContent="Charges — "+fmt(tC2)+" €";
     wrap.querySelector("#inc-total").textContent="Revenus — "+fmt(tI2)+" €";
     wrap.querySelector("#sum-charges").textContent="− "+fmt(tC2)+" €";
@@ -584,12 +610,13 @@ function renderConfig(){
     const sd=wrap.querySelector("#sum-dispo");sd.textContent=fmt(dispo2)+" €";
     sd.style.color=dispo2<0?"var(--red)":"var(--text)";
     wrap.querySelector("#sum-env").textContent=fmt(env2)+" €";
-    wrap.querySelector("#sum-env").closest(".sum-row").querySelector(".sum-label").textContent=`Enveloppe / sem. (×${loc2.weeksInMonth})`;
+    wrap.querySelector("#sum-env-label").textContent=loc2.envMode==="fixed"?"Enveloppe / sem. (fixe)":`Enveloppe / sem. (×${loc2.weeksInMonth})`;
   }
 
   wrap.addEventListener("input",e=>{
     const t=e.target;
     if(t.id==="cfg-month"){state.config.month=t.value;persist();return;}
+    if(t.id==="cfg-envfixed"){state.config.envFixed=parseFloat(t.value)||0;persist();refreshSummary();return;}
     if(t.id==="cfg-weeks"){
       const n=Math.min(6,Math.max(4,parseInt(t.value)||4));
       state.config.weeksInMonth=n;
@@ -611,6 +638,15 @@ function renderConfig(){
   });
   wrap.addEventListener("click",e=>{
     const t=e.target;
+    if(t.classList.contains("seg-btn")){
+      state.config.envMode=t.dataset.env;
+      persist();
+      // bascule l'état visuel des boutons + affichage du champ montant fixe
+      wrap.querySelectorAll(".seg-btn").forEach(b=>b.classList.toggle("on",b.dataset.env===state.config.envMode));
+      wrap.querySelector("#env-fixed-wrap").style.display = state.config.envMode==="fixed" ? "" : "none";
+      refreshSummary();
+      return;
+    }
     if(t.classList.contains("btn-rem")){const sec=t.dataset.sec,id=Number(t.dataset.id);state.config[sec]=state.config[sec].filter(x=>x.id!==id);persist();render();return;}
     if(t.classList.contains("btn-addrow")){const sec=t.dataset.sec;state.config[sec].push({id:genId(),name:"",amount:0});persist();render();return;}
     if(t.id==="cfg-newmonth"){
