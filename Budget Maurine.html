@@ -134,6 +134,7 @@ input:focus{border-color:var(--brand);background:#fff}
 .sum-val{font-size:14px;font-weight:700}
 .sum-divider{border:none;border-top:1px solid var(--line);margin:12px 0}
 .btn-save{width:100%;padding:16px;border-radius:15px;background:var(--brand);border:none;color:#fff;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer;transition:background .3s;margin-bottom:10px;box-shadow:0 6px 16px rgba(46,100,255,.28)}
+.btn-newmonth{width:100%;padding:14px;border-radius:14px;background:var(--surface);border:1.5px solid var(--line);color:var(--muted);font-size:15px;font-weight:700;font-family:inherit;cursor:pointer;margin-bottom:8px}
 .btn-save.saved{background:var(--green);box-shadow:0 6px 16px rgba(22,163,74,.28)}
 .save-warn{font-size:11.5px;color:var(--faint);text-align:center;margin-bottom:24px}
 .params-row{display:flex;gap:10px}
@@ -211,19 +212,17 @@ function svgEl(tag,attrs){const e=document.createElementNS(NS,tag);for(const k i
 // ── State ─────────────────────────────────────────────────────────
 let state = {
   tab: "home",
-  config: loadData("bc") || DEFAULT_CONFIG,
-  weeks: loadData("bw") || emptyWeeks((loadData("bc")||DEFAULT_CONFIG).weeksInMonth),
+  config: loadData("bc_m") || DEFAULT_CONFIG,
+  weeks: loadData("bw_m") || emptyWeeks((loadData("bc_m")||DEFAULT_CONFIG).weeksInMonth),
   modal: null,
   modalCat: "Courses",
   openWeekId: null,
-  configLocal: null,
-  savedFlash: false,
   recap: false
 };
 // Migration douce : assure une catégorie sur anciennes dépenses
 state.weeks.forEach(w=>w.expenses.forEach(e=>{if(!e.cat)e.cat="Autre"}));
 
-function persist(){saveData("bc",state.config);saveData("bw",state.weeks);}
+function persist(){saveData("bc_m",state.config);saveData("bw_m",state.weeks);}
 
 // ── Calculs partagés ──────────────────────────────────────────────
 function totals(){
@@ -537,15 +536,14 @@ function renderModal(){
 
 // ── CONFIG ────────────────────────────────────────────────────────
 function renderConfig(){
-  if(!state.configLocal) state.configLocal=JSON.parse(JSON.stringify(state.config));
-  const loc=state.configLocal;
+  const loc=state.config; // travail direct sur l'état réel, auto-sauvegardé
   const tC=loc.charges.reduce((s,c)=>s+Number(c.amount||0),0);
   const tI=loc.income.reduce((s,c)=>s+Number(c.amount||0),0);
   const dispo=tI-tC, env=Math.round(dispo/(loc.weeksInMonth||5));
 
   const wrap=el("div","config-wrap safe");
   wrap.innerHTML=`<div class="config-title" style="padding-top:6px">Configuration</div>
-    <div class="config-sub">Charges et revenus du mois.</div>`;
+    <div class="config-sub">Tout est enregistré automatiquement.</div>`;
 
   const psec=el("div","");
   psec.innerHTML=`<div class="sec-head">Paramètres</div>`;
@@ -568,48 +566,58 @@ function renderConfig(){
     <div class="sum-row"><span class="sum-label">Enveloppe / sem. (×${loc.weeksInMonth})</span><span class="sum-val num" id="sum-env" style="color:var(--brand)">${fmt(env)} €</span></div>`;
   wrap.appendChild(sumbox);
 
-  const saveBtn=el("button","btn-save"+(state.savedFlash?" saved":""),state.savedFlash?"✓ Sauvegardé !":"Sauvegarder le mois");
-  saveBtn.id="cfg-save";wrap.appendChild(saveBtn);
-  wrap.appendChild(el("div","save-warn","⚠ Réinitialise les dépenses hebdo du mois"));
+  // Bouton "Nouveau mois" : remet à zéro UNIQUEMENT les dépenses des semaines (avec confirmation)
+  const newMonthBtn=el("button","btn-newmonth","↺ Commencer un nouveau mois");
+  newMonthBtn.id="cfg-newmonth";wrap.appendChild(newMonthBtn);
+  wrap.appendChild(el("div","save-warn","Vide les dépenses hebdo · garde tes charges et revenus"));
 
   // Met à jour uniquement les chiffres affichés, sans recréer les inputs (garde le focus/clavier actif)
   function refreshSummary(){
-    const loc2=state.configLocal;
+    const loc2=state.config;
     const tC2=loc2.charges.reduce((s,c)=>s+Number(c.amount||0),0);
     const tI2=loc2.income.reduce((s,c)=>s+Number(c.amount||0),0);
     const dispo2=tI2-tC2, env2=Math.round(dispo2/(loc2.weeksInMonth||5));
     wrap.querySelector("#chg-total").textContent="Charges — "+fmt(tC2)+" €";
     wrap.querySelector("#inc-total").textContent="Revenus — "+fmt(tI2)+" €";
-    const sc=wrap.querySelector("#sum-charges");sc.textContent="− "+fmt(tC2)+" €";
-    const si=wrap.querySelector("#sum-income");si.textContent="+ "+fmt(tI2)+" €";
+    wrap.querySelector("#sum-charges").textContent="− "+fmt(tC2)+" €";
+    wrap.querySelector("#sum-income").textContent="+ "+fmt(tI2)+" €";
     const sd=wrap.querySelector("#sum-dispo");sd.textContent=fmt(dispo2)+" €";
     sd.style.color=dispo2<0?"var(--red)":"var(--text)";
-    const se=wrap.querySelector("#sum-env");se.textContent=fmt(env2)+" €";
-    const envRow=se.closest(".sum-row").querySelector(".sum-label");
-    envRow.textContent=`Enveloppe / sem. (×${loc2.weeksInMonth})`;
+    wrap.querySelector("#sum-env").textContent=fmt(env2)+" €";
+    wrap.querySelector("#sum-env").closest(".sum-row").querySelector(".sum-label").textContent=`Enveloppe / sem. (×${loc2.weeksInMonth})`;
   }
 
   wrap.addEventListener("input",e=>{
     const t=e.target;
-    if(t.id==="cfg-month"){state.configLocal.month=t.value;return;} // pas besoin de re-render
-    if(t.id==="cfg-weeks"){state.configLocal.weeksInMonth=parseInt(t.value)||4;refreshSummary();return;}
+    if(t.id==="cfg-month"){state.config.month=t.value;persist();return;}
+    if(t.id==="cfg-weeks"){
+      const n=Math.min(6,Math.max(4,parseInt(t.value)||4));
+      state.config.weeksInMonth=n;
+      // ajuste le nombre de semaines sans effacer les dépenses existantes
+      if(state.weeks.length<n){
+        for(let i=state.weeks.length;i<n;i++) state.weeks.push({id:i+1,label:`Semaine ${i+1}`,expenses:[]});
+      } else if(state.weeks.length>n){
+        state.weeks=state.weeks.slice(0,n);
+      }
+      persist();refreshSummary();return;
+    }
     if(t.dataset.sec&&t.dataset.id&&t.dataset.field){
       const sec=t.dataset.sec,id=Number(t.dataset.id),field=t.dataset.field;
-      state.configLocal[sec]=state.configLocal[sec].map(x=>{
+      state.config[sec]=state.config[sec].map(x=>{
         if(x.id!==id)return x;let v=t.value;if(field==="amount")v=parseFloat(v)||0;return{...x,[field]:v};
       });
-      refreshSummary();
+      persist();refreshSummary();
     }
   });
   wrap.addEventListener("click",e=>{
     const t=e.target;
-    if(t.classList.contains("btn-rem")){const sec=t.dataset.sec,id=Number(t.dataset.id);state.configLocal[sec]=state.configLocal[sec].filter(x=>x.id!==id);render();return;}
-    if(t.classList.contains("btn-addrow")){const sec=t.dataset.sec;state.configLocal[sec].push({id:genId(),name:"",amount:0});render();return;}
-    if(t.id==="cfg-save"){
-      state.config=JSON.parse(JSON.stringify(state.configLocal));
-      state.weeks=emptyWeeks(state.config.weeksInMonth);
-      state.configLocal=null;state.savedFlash=true;persist();render();
-      setTimeout(()=>{state.savedFlash=false;},2000);
+    if(t.classList.contains("btn-rem")){const sec=t.dataset.sec,id=Number(t.dataset.id);state.config[sec]=state.config[sec].filter(x=>x.id!==id);persist();render();return;}
+    if(t.classList.contains("btn-addrow")){const sec=t.dataset.sec;state.config[sec].push({id:genId(),name:"",amount:0});persist();render();return;}
+    if(t.id==="cfg-newmonth"){
+      if(confirm("Commencer un nouveau mois ? Cela efface les dépenses des semaines, mais garde tes charges et revenus.")){
+        state.weeks=emptyWeeks(state.config.weeksInMonth);
+        persist();state.tab="home";render();
+      }
     }
   });
   return wrap;
@@ -700,7 +708,7 @@ function renderBottomNav(){
   ].forEach(item=>{
     const btn=el("button","nav-btn"+(state.tab===item.id?" active":""));
     btn.innerHTML=`<span class="nav-icon">${item.icon}</span><span class="nav-label">${item.label}</span>`;
-    btn.addEventListener("click",()=>{state.tab=item.id;if(item.id==="config")state.configLocal=null;render();});
+    btn.addEventListener("click",()=>{state.tab=item.id;render();});
     nav.appendChild(btn);
   });
   return nav;
